@@ -1,0 +1,51 @@
+{
+  "extends": ["nolabs-ai/claude"],
+  "meta": {
+    "name": "NAME",
+    "version": "1"
+  },
+  "workdir": {
+    "access": "readwrite"
+  },
+  "filesystem": {
+    "allow": [],
+    "deny": [],
+    "read_file": ["~/.gitignore"],
+    "read": ["~/.CFUserTextEncoding"]
+  },
+  "network": {
+    "allow_domain": []
+  },
+  "environment": {
+    "allow_vars": [
+      "HOME",
+      "SHELL",
+      "TERM",
+      "PATH",
+      "LSCOLORS",
+      "LS_COLORS",
+      "LC_ALL",
+      "LANG",
+      "PWD",
+      "USER",
+      "EDITOR",
+      "DO_NOT_TRACK"
+    ],
+    "set_vars": {
+      "CLAUDE_CODE_GLOB_NO_IGNORE": "false",
+      "CLAUDE_CODE_HIDE_CWD": "1",
+      "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "5",
+      "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "3",
+      "CLAUDE_CODE_MAX_TURNS": "200",
+      "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
+      "CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "0",
+      "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS": "1",
+      "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+      "DISABLE_AUTO_COMPACT": "1",
+      "DISABLE_FEEDBACK_COMMAND": "1",
+      "DISABLE_INSTALL_GITHUB_APP_COMMAND": "1",
+      "DISABLE_UPGRADE_COMMAND": "1",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-6"
+    }
+  }
+}

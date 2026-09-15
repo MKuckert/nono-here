@@ -1,0 +1,35 @@
+{
+  "extends": ["default"],
+  "meta": {
+    "name": "NAME",
+    "version": "1"
+  },
+  "workdir": {
+    "access": "readwrite"
+  },
+  "filesystem": {
+    "allow": [],
+    "deny": [],
+    "read_file": ["~/.gitignore"],
+    "read": ["~/.CFUserTextEncoding"]
+  },
+  "network": {
+    "allow_domain": []
+  },
+  "environment": {
+    "allow_vars": [
+      "HOME",
+      "SHELL",
+      "TERM",
+      "PATH",
+      "LSCOLORS",
+      "LS_COLORS",
+      "LC_ALL",
+      "LANG",
+      "PWD",
+      "USER",
+      "EDITOR",
+      "DO_NOT_TRACK"
+    ]
+  }
+}
