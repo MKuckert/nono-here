@@ -19,9 +19,16 @@ nono-here.sh [args passed through to the harness]
 - Pick a harness: interactively (via `select`, requires a TTY) or
   non-interactively via `NONO_HERE_HARNESS=<harness>`.
 - Resolve a template (see [Template resolution](#template-resolution)).
-- Validate the template, create `.sandbox/`, copy the template into it,
-  substitute the chosen harness into `.sandbox/defaults.sh`, move
-  `run_harness.sh` into the workspace root.
+- Validate the template.
+- Check that the harness's official `nolabs-ai` profile pack is installed
+  in the local nono pack store; if missing, run `nono pull <pack>`
+  (e.g. `nono pull nolabs-ai/codex`). Skipped with a warning when `nono`
+  is not on the PATH; a failed pull aborts with exit 11. The pack store
+  is `$NONO_PACKAGES`, else `$NONO_CONFIG/packages`, else
+  `${XDG_CONFIG_HOME:-~/.config}/nono/packages`.
+- Create `.sandbox/`, copy the template into it, substitute the chosen
+  harness into `.sandbox/defaults.sh`, move `run_harness.sh` into the
+  workspace root.
 - Hand over to `./run_harness.sh "$@"`.
 
 **Subsequent runs (fast path):** `run_harness.sh` already exists and is
@@ -57,9 +64,12 @@ edit it freely afterward (e.g. to set `SANDBOX_COMMAND_DEFAULTS`).
 
 ## Adding a harness
 
-Add the name to the `HARNESSES` array at the top of `nono-here.sh`. Add a
-matching `templates/<harness>/` directory if it needs a non-default
-template; otherwise it falls back to `templates/default`.
+Add the name to the `HARNESSES` array at the top of `nono-here.sh`. If the
+harness has an official `nolabs-ai` registry pack, add a matching case
+branch to `nono_pack_for()` so provisioning checks for and pulls it; without
+a branch the profile check is skipped with a notice. Add a matching
+`templates/<harness>/` directory if it needs a non-default template;
+otherwise it falls back to `templates/default`.
 
 ## Exit codes
 
@@ -75,6 +85,7 @@ template; otherwise it falls back to `templates/default`.
 | 8 | Invalid `NONO_HERE_HARNESS` value |
 | 9 | A path that must be a regular file/directory is something else (e.g. `.sandbox` is not a directory) |
 | 10 | Interactive harness selection aborted (input closed) |
+| 11 | `nono pull` of the harness's profile pack failed |
 
 ## Testing
 
