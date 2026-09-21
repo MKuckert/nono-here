@@ -10,10 +10,16 @@ set -euo pipefail
 # the same non-interactive path real CI users get. No test-only branches
 # exist in nono-here.sh or the template run_harness.sh.
 #
-# Exit code coverage: 2-9 are each exercised below. Exit 1 is excluded
-# (unexpected-internal-only, S9). Exit 10 (Ctrl-D at the `select` prompt)
-# is excluded here: it requires a real TTY and was verified manually at
-# Task 3 review; nothing below fakes it with a PTY.
+# Exit code coverage: 2-9 are each exercised below, plus 11 (nono pull
+# failure) in case 19. Exit 1 is excluded (unexpected-internal-only, S9).
+# Exit 10 (Ctrl-D at the `select` prompt) is excluded here: it requires a
+# real TTY and was verified manually at Task 3 review; nothing below fakes
+# it with a PTY.
+#
+# Registry isolation: every run_nh child gets a stub `nono` first on PATH
+# (NONO_SHIELD) so no case can reach the real registry or write into the
+# user's real pack store on a host where nono is installed. Cases that need
+# a specific fake nono (case17+) bypass run_nh and set their own PATH.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NONO_HERE="$REPO_ROOT/nono-here.sh"
@@ -29,6 +35,12 @@ FAIL_COUNT=0
 # survive the subshell.
 FIXTURE_LEDGER="$(mktemp "${TMPDIR:-/tmp}/nono-here-test-ledger.XXXXXX")"
 
+# Stub `nono` that does nothing and exits 0; see the header note on
+# registry isolation.
+NONO_SHIELD="$(mktemp -d "${TMPDIR:-/tmp}/nono-here-test-shield.XXXXXX")"
+printf '#!/bin/sh\nexit 0\n' >"$NONO_SHIELD/nono"
+chmod +x "$NONO_SHIELD/nono"
+
 cleanup() {
   local d
   if [[ -f "$FIXTURE_LEDGER" ]]; then
@@ -39,6 +51,7 @@ cleanup() {
     done <"$FIXTURE_LEDGER"
     rm -f "$FIXTURE_LEDGER"
   fi
+  rm -rf "$NONO_SHIELD"
   return 0
 }
 trap 'ec=$?; cleanup; exit $ec' EXIT
@@ -130,12 +143,17 @@ STUB
 
 # make_template <dir> [marker-text]
 # Builds a minimally valid template: executable run_harness.sh and
-# start.sh stubs, optionally a marker.txt to identify it after copy.
+# start.sh stubs, a defaults.sh carrying the provisioning placeholder,
+# optionally a marker.txt to identify it after copy.
 make_template() {
   local dir="$1" marker="${2:-}"
   mkdir -p "$dir"
   write_stub_run_harness "$dir/run_harness.sh"
   write_stub_start "$dir/start.sh"
+  cat >"$dir/defaults.sh" <<'EOF'
+SANDBOX_COMMAND="__NONO_HERE_SANDBOX_COMMAND__"
+SANDBOX_COMMAND_DEFAULTS=()
+EOF
   if [[ -n "$marker" ]]; then
     printf '%s\n' "$marker" >"$dir/marker.txt"
   fi
@@ -196,7 +214,9 @@ run_nh() {
   shift 8
   local rc=0
   local env_args=(-u NONO_HERE_HOME -u NONO_HERE_HARNESS -u RUN_HARNESS_RECORD)
+  env_args+=(-u XDG_CONFIG_HOME -u NONO_CONFIG -u NONO_PACKAGES)
   env_args+=("HOME=$home")
+  env_args+=("PATH=$NONO_SHIELD:$PATH") # registry isolation, see header
   [[ -n "$nh" ]] && env_args+=("NONO_HERE_HOME=$nh")
   [[ -n "$harness" ]] && env_args+=("NONO_HERE_HARNESS=$harness")
   [[ -n "$record" ]] && env_args+=("RUN_HARNESS_RECORD=$record")
@@ -590,11 +610,12 @@ case11() {
 }
 
 # ==================================================================
-# Case 12: template-provided defaults.sh preserved verbatim
+# Case 12: template-provided defaults.sh passes through untouched except
+# the placeholder, which is substituted with the selected harness
 # ==================================================================
 case12() {
-  local id="12: template-provided defaults.sh preserved verbatim"
-  local fx wd home nh record rc before after
+  local id="12: template-provided defaults.sh passes through, placeholder substituted"
+  local fx wd home nh record rc content
   fx="$(new_fixture)"
   wd="$fx/work"
   home="$fx/home"
@@ -603,10 +624,10 @@ case12() {
   make_template "$nh/templates/default"
   cat >"$nh/templates/default/defaults.sh" <<'EOF'
 # custom harness-provided defaults
-SANDBOX_COMMAND="pi"
+SANDBOX_COMMAND="__NONO_HERE_SANDBOX_COMMAND__"
+EXTRA_LINE="keep me"
 SANDBOX_COMMAND_DEFAULTS=("--custom-flag")
 EOF
-  before="$(sha "$nh/templates/default/defaults.sh")"
   record="$fx/record.bin"
 
   rc="$(run_nh "$wd" "$home" "$nh" "pi" "$record" /dev/null "$fx/out" "$fx/err")"
@@ -619,12 +640,15 @@ EOF
     fail "$id" "defaults.sh missing after provisioning"
     return
   fi
-  after="$(sha "$wd/.sandbox/defaults.sh")"
-  if [[ "$before" != "$after" ]]; then
-    fail "$id" "defaults.sh content changed"
-    return
+  content="$(cat "$wd/.sandbox/defaults.sh")"
+  if [[ "$content" == *'SANDBOX_COMMAND="pi"'* \
+      && "$content" == *'EXTRA_LINE="keep me"'* \
+      && "$content" == *'SANDBOX_COMMAND_DEFAULTS=("--custom-flag")'* \
+      && "$content" != *'__NONO_HERE_SANDBOX_COMMAND__'* ]]; then
+    pass "$id"
+  else
+    fail "$id" "unexpected content: $content"
   fi
-  pass "$id"
 }
 
 # ==================================================================
@@ -773,9 +797,11 @@ case14() {
   (
     cd "$wd" &&
       env -u NONO_HERE_HOME \
+        -u XDG_CONFIG_HOME -u NONO_CONFIG -u NONO_PACKAGES \
         HOME="$home" \
         NONO_HERE_HARNESS="codex" \
         RUN_HARNESS_RECORD="$record" \
+        PATH="$NONO_SHIELD:$PATH" \
         "$link_path"
   ) >"$fx/out" 2>"$fx/err" || rc2=$?
   rc="$rc2"
@@ -860,6 +886,177 @@ case16() {
 }
 
 # ==================================================================
+# Cases 17-20: nolabs-ai profile pack check during provisioning
+# ==================================================================
+
+# write_fake_nono <path> <calls-file> [fail_pull]
+# Records each invocation as one "argv" line; `pull` exits fail_pull
+# (default 0), everything else exits 0.
+write_fake_nono() {
+  local path="$1" calls="$2" fail_pull="${3:-0}"
+  cat >"$path" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >>"$calls"
+if [ "\${1:-}" = "pull" ]; then exit $fail_pull; fi
+exit 0
+STUB
+  chmod +x "$path"
+}
+
+# run_nh_profile <workdir> <home> <nono_home> <harness> <record> <calls>
+# <bin-dir> <stdout> <stderr> [fail_pull] -> echoes the exit code. Like
+# run_nh, but with a custom PATH ($bin-dir first) so the case controls which
+# `nono` the child sees, and with a recording fake nono installed in
+# $bin-dir.
+run_nh_profile() {
+  local wd="$1" home="$2" nh="$3" harness="$4" record="$5" calls="$6" bindir="$7" out="$8" err="$9" fail_pull="${10:-0}"
+  local rc=0
+  write_fake_nono "$bindir/nono" "$calls" "$fail_pull"
+  (
+    cd "$wd" &&
+      env -u NONO_HERE_HOME -u NONO_HERE_HARNESS -u RUN_HARNESS_RECORD \
+        -u XDG_CONFIG_HOME -u NONO_CONFIG -u NONO_PACKAGES \
+        HOME="$home" NONO_HERE_HOME="$nh" NONO_HERE_HARNESS="$harness" \
+        RUN_HARNESS_RECORD="$record" PATH="$bindir:$PATH" \
+        "$NONO_HERE"
+  ) </dev/null >"$out" 2>"$err" || rc=$?
+  echo "$rc"
+}
+
+# ==================================================================
+# Case 17: pack already installed -> no pull, provisioning completes
+# ==================================================================
+case17() {
+  local id="17: pack installed -> no pull, exit 0"
+  local fx wd home nh record calls bin rc
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
+  mkdir -p "$wd" "$home" "$nh" "$bin"
+  make_template "$nh/templates/default"
+  # Installed pack in the child's HOME pack store.
+  mkdir -p "$home/.config/nono/packages/nolabs-ai/codex"
+  echo '{}' >"$home/.config/nono/packages/nolabs-ai/codex/package.json"
+  record="$fx/record.bin"; calls="$fx/nono_calls"
+
+  rc="$(run_nh_profile "$wd" "$home" "$nh" "codex" "$record" "$calls" "$bin" "$fx/out" "$fx/err")"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ -s "$calls" ]] && grep -q '^pull ' "$calls"; then
+    fail "$id" "nono pull was called although the pack is installed: $(cat "$calls")"
+    return
+  fi
+  if grep -q "profile pack 'nolabs-ai/codex' is installed" "$fx/err"; then
+    pass "$id"
+  else
+    fail "$id" "stderr missing installed notice: $(cat "$fx/err")"
+  fi
+}
+
+# ==================================================================
+# Case 18: pack missing -> nono pull with the mapped name, exit 0
+# ==================================================================
+case18() {
+  local id="18: pack missing -> nono pull nolabs-ai/codex, exit 0"
+  local fx wd home nh record calls bin rc
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
+  mkdir -p "$wd" "$home" "$nh" "$bin"
+  make_template "$nh/templates/default"
+  record="$fx/record.bin"; calls="$fx/nono_calls"
+
+  rc="$(run_nh_profile "$wd" "$home" "$nh" "codex" "$record" "$calls" "$bin" "$fx/out" "$fx/err")"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ ! -f "$wd/run_harness.sh" ]]; then
+    fail "$id" "run_harness.sh not provisioned"
+    return
+  fi
+  if [[ -f "$calls" ]] && grep -q '^pull nolabs-ai/codex$' "$calls"; then
+    pass "$id"
+  else
+    fail "$id" "expected 'pull nolabs-ai/codex', calls: $(cat "$calls" 2>/dev/null)"
+  fi
+}
+
+# ==================================================================
+# Case 19: nono pull fails -> exit 11, workspace untouched
+# ==================================================================
+case19() {
+  local id="19: nono pull fails -> exit 11, workspace untouched"
+  local fx wd home nh record calls bin rc
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
+  mkdir -p "$wd" "$home" "$nh" "$bin"
+  make_template "$nh/templates/default"
+  record="$fx/record.bin"; calls="$fx/nono_calls"
+
+  rc="$(run_nh_profile "$wd" "$home" "$nh" "codex" "$record" "$calls" "$bin" "$fx/out" "$fx/err" 7)"
+
+  if [[ "$rc" != "11" ]]; then
+    fail "$id" "expected exit 11, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ -e "$wd/run_harness.sh" || -e "$wd/.sandbox" ]]; then
+    fail "$id" "workspace modified despite failed pull"
+    return
+  fi
+  if grep -q 'nono pull nolabs-ai/codex failed' "$fx/err"; then
+    pass "$id"
+  else
+    fail "$id" "stderr missing failure message: $(cat "$fx/err")"
+  fi
+}
+
+# ==================================================================
+# Case 20: nono absent from PATH -> warning, provisioning still completes
+# ==================================================================
+case20() {
+  local id="20: nono absent -> warning, exit 0"
+  local fx wd home nh record bin rc t
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
+  mkdir -p "$wd" "$home" "$nh" "$bin"
+  make_template "$nh/templates/default"
+  record="$fx/record.bin"
+
+  # Minimal PATH: only the tools nono-here.sh needs, and no `nono`.
+  for t in bash basename dirname git grep mkdir cp sed mv; do
+    ln -s "$(command -v "$t")" "$bin/$t"
+  done
+
+  local rc2=0
+  (
+    cd "$wd" &&
+      env -u NONO_HERE_HOME -u NONO_HERE_HARNESS -u RUN_HARNESS_RECORD \
+        -u XDG_CONFIG_HOME -u NONO_CONFIG -u NONO_PACKAGES \
+        HOME="$home" NONO_HERE_HOME="$nh" NONO_HERE_HARNESS="pi" \
+        RUN_HARNESS_RECORD="$record" PATH="$bin" \
+        "$NONO_HERE"
+  ) </dev/null >"$fx/out" 2>"$fx/err" || rc2=$?
+  rc="$rc2"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ ! -f "$wd/run_harness.sh" ]]; then
+    fail "$id" "run_harness.sh not provisioned"
+    return
+  fi
+  if grep -q "'nono' not found in PATH" "$fx/err" && grep -q "nolabs-ai/pi" "$fx/err"; then
+    pass "$id"
+  else
+    fail "$id" "stderr missing warning: $(cat "$fx/err")"
+  fi
+}
+
+# ==================================================================
 # Driver
 # ==================================================================
 main() {
@@ -879,6 +1076,10 @@ main() {
   case14
   case15
   case16
+  case17
+  case18
+  case19
+  case20
 
   echo "----"
   echo "passed: $PASS_COUNT, failed: $FAIL_COUNT"
