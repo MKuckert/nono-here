@@ -3,9 +3,10 @@
 Zero-config bootstrap for running AI agent harnesses (Claude, opencode, codex,
 copilot, pi, ...) inside a [`nono`](https://nono.sh) sandbox.
 
-Drop `nono-here.sh` on your `PATH`, run it from any project, and it
-provisions a `.sandbox/` directory plus a `run_harness.sh` entry point —
-then hands over to the harness. Every subsequent run in that project takes
+Drop `nono-here.sh` on your `PATH` (keeping its sibling `templates/`
+directory next to it, or overriding via `~/.nono-here/templates/`), run it
+from any project, and it provisions a `.sandbox/` directory plus a
+`run_harness.sh` entry point — then hands over to the harness. Every subsequent run in that project takes
 a silent fast path straight to the harness.
 
 ## Usage
@@ -37,6 +38,70 @@ silently.
 
 The workspace is the Git root (`git rev-parse --show-toplevel`) if inside a
 repo, otherwise `$PWD`.
+
+## When it earns its keep
+
+### Long sandboxed invocations collapse to one word
+
+Without nono-here, every run spells out the full sandbox:
+
+```sh
+nono wrap --profile .sandbox/profile.json --workdir "$PWD" --allow-cwd -- \
+  claude --allowed-tools "Grep Glob" --model sonnet --max-turns 25
+```
+
+After provisioning, the same run is:
+
+```sh
+nono-here.sh --max-turns 25
+```
+
+(`run_harness.sh` is what `nono-here.sh` hands over to; you never need
+to call it yourself.)
+
+The harness command and its repeated flags live in
+`.sandbox/defaults.sh` (copied once at provisioning, then yours to edit);
+the profile path and workdir are handled by `start.sh`:
+
+```sh
+SANDBOX_COMMAND="claude"
+SANDBOX_COMMAND_DEFAULTS=(--allowed-tools "Grep Glob" --model sonnet)
+```
+
+`run_harness.sh` prepends `SANDBOX_COMMAND_DEFAULTS` whenever you pass no
+arguments or start with a flag, so a bare `nono-here.sh` runs the full
+default invocation — and the fast path is silent, so it stays out of the
+way in a daily workflow.
+
+### Sharing a sandboxed setup with your team
+
+Commit `run_harness.sh` and `.sandbox/` to the project. The template's
+`.gitignore` excludes only the local `profile.json`, so the shared parts —
+`profile.template.json`, `hooks/`, `start.sh`, `defaults.sh` — travel with
+the source. A teammate who has installed [nono](https://nono.sh) clones the
+repo and runs `./run_harness.sh` (or `nono-here.sh`, if it is on their
+PATH — the fast path takes over); no provisioning needed. On first
+start, `start.sh` copies `profile.template.json` to `profile.json` (with a
+"check and adjust" notice), so each person keeps local overrides private
+while the team shares one baseline.
+
+### Per-project profiles, tuned per project
+
+Each project gets its own `.sandbox/profile.template.json` — network
+domains, filesystem rules, and allowed environment variables scoped to
+what that project actually needs. Local tweaks go in the git-ignored
+`profile.json`; bump `meta.version` in the template to get a diff prompt
+whenever the shared baseline changes (version comparison requires `jq`;
+without it you get a plain "differs from template" notice).
+
+### Scripted and non-interactive provisioning
+
+```sh
+NONO_HERE_HARNESS=pi nono-here.sh   # no TTY required; args pass through
+```
+
+Useful in CI, remote shells, and dotfiles bootstrap scripts where the
+interactive `select` prompt is unavailable.
 
 ## Template resolution
 
@@ -102,7 +167,9 @@ overridden, so the real `$HOME` is never touched.
 ```
 nono-here.sh              # the entry point
 templates/
-  default/                 # fallback template for any harness
-  claude/                  # claude-specific template
+  default/                 # fallback template for any harness:
+                           # run_harness.sh, start.sh, defaults.sh,
+                           # profile.template.json, hooks/, .gitignore
+  claude/                  # claude-specific template (same layout)
 test_nono_here.sh          # test suite
 ```
