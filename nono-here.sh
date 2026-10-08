@@ -76,6 +76,45 @@ ensure_nono_profile() {
   fi
 }
 
+# Export the nono profile JSON schema to $HOME/.nono-here/ so the $schema
+# reference in profile.template.json resolves for editors that expand ~.
+# Called only during provisioning, alongside the profile pack check above.
+# Best-effort by design: the schema only feeds editor validation, so a
+# missing nono, an unwritable home, or a failed export warns and
+# provisioning continues. SCHEMA_DEST records the destination on success
+# (consumed by provision_summary below); it stays empty otherwise.
+SCHEMA_DEST=""
+
+export_nono_schema() {
+  local home dest
+  home="${HOME:-}"
+  if [[ -z "$home" ]]; then
+    echo "$SELF: HOME is not set; cannot export the nono profile schema to ~/.nono-here/ (editor validation of profile.template.json will be unavailable)" >&2
+    return 0
+  fi
+  if ! command -v nono >/dev/null 2>&1; then
+    echo "$SELF: 'nono' not found in PATH; cannot export the nono profile schema to ~/.nono-here/ (editor validation of profile.template.json will be unavailable)" >&2
+    return 0
+  fi
+  dest="$home/.nono-here/nono-profile.schema.json"
+  if ! mkdir -p "$home/.nono-here"; then
+    echo "$SELF: Warning: cannot create $home/.nono-here; skipping profile schema export" >&2
+    return 0
+  fi
+  if ! nono profile schema --output "$dest"; then
+    echo "$SELF: Warning: 'nono profile schema --output $dest' failed; editor validation of profile.template.json will be unavailable" >&2
+    return 0
+  fi
+  # Non-fatal, mirroring the pack-check warning above: a nono that reports
+  # success without producing the file (version drift) is surfaced, not fatal.
+  if [[ ! -f "$dest" ]]; then
+    echo "$SELF: Warning: 'nono profile schema' succeeded but $dest was not created; editor validation of profile.template.json will be unavailable" >&2
+    return 0
+  fi
+  SCHEMA_DEST="$dest"
+  echo "$SELF: profile schema exported to $dest" >&2
+}
+
 # Resolve the script's own directory, following symlinks (portable, no
 # readlink -f / realpath — must work on macOS/Bash 3.2). Bounded to guard
 # against symlink cycles (e.g. a -> b -> a).
@@ -109,11 +148,44 @@ export NONO_HERE_HOME="${NONO_HERE_HOME:-$script_dir}"
 
 workdir=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
 
-# The single exec site, shared by the fast path and the end of provisioning
-# so both hand over identically (same CWD, same argument handling).
+# The single exec site, used by the fast path. Provisioning deliberately
+# does not exec (it prints a summary and stops — see provision_summary
+# below); whenever a handover does happen, it is from this one place with
+# the same CWD and argument handling.
 handover() {
   cd "$workdir" || die 1 "cannot enter $workdir"
   exec ./run_harness.sh "$@"
+}
+
+# End of provisioning: print a small summary and stop — the first run does
+# not launch the harness. The user starts it with ./run_harness.sh (or
+# re-runs $SELF, which now takes the silent fast path). Arguments passed to
+# the provisioning run are not forwarded; when there are any, the summary
+# offers the exact re-run command so they are not lost.
+provision_summary() {
+  local quoted=() a
+  {
+    echo "$SELF: provisioned:"
+    echo "  workdir:   $workdir"
+    echo "  harness:   $harness"
+    echo "  template:  $template"
+    echo "  sandbox:   $workdir/.sandbox"
+    if [[ -n "$SCHEMA_DEST" ]]; then
+      echo "  schema:    $SCHEMA_DEST"
+    fi
+    echo
+    echo "  Start the harness:  ./run_harness.sh   (from $workdir)"
+    if [[ $# -gt 0 ]]; then
+      for a in "$@"; do
+        quoted+=("$(printf '%q' "$a")")
+      done
+      echo
+      echo "  Your arguments were not forwarded to the harness (the first run only provisions)."
+      echo "  Re-run with them:  ./run_harness.sh ${quoted[*]}"
+    fi
+    echo
+    echo "  Re-running $SELF now takes the fast path and launches the harness."
+  } >&2
 }
 
 # Fast path: an already-provisioned workspace hands straight over, silently.
@@ -238,6 +310,7 @@ fi
 # stale-.sandbox confirmation prompt, the exit-9 guards — so a pull never
 # takes effect for a provisioning that ends without creating .sandbox.
 ensure_nono_profile "$harness"
+export_nono_schema
 
 mkdir -p "$workdir/.sandbox"
 cp -R "$template/." "$workdir/.sandbox/"
@@ -262,6 +335,39 @@ fi
 sed "s/__NONO_HERE_SANDBOX_COMMAND__/$harness/" "$workdir/.sandbox/defaults.sh" >"$workdir/.sandbox/defaults.sh.tmp"
 mv "$workdir/.sandbox/defaults.sh.tmp" "$workdir/.sandbox/defaults.sh"
 
+# profile.template.json came from the template via the cp -R above, still
+# carrying the generic "NAME" placeholder in meta.name. Substitute it with
+# the base name of the workdir so the provisioned project's profile carries
+# a unique, meaningful name (its directory) rather than the literal "NAME".
+# Only the per-project .sandbox copy is adjusted; the bundled template keeps
+# "NAME" as the neutral placeholder. Gracefully skipped when the template
+# ships no profile.template.json (a custom template), and a no-op when
+# meta.name was already customized away from "NAME" (the sed matches nothing
+# and rewrites the file unchanged). Same tmp-then-mv pattern as defaults.sh:
+# if it fails before the mv, the placeholder is left in place and the next
+# invocation re-enters provisioning to retry.
+profile_tpl="$workdir/.sandbox/profile.template.json"
+if [[ -f "$profile_tpl" ]]; then
+  name_base=$(basename "$workdir")
+  # JSON-encode the name so it survives a JSON decode of the profile AND
+  # sed's replacement-string processing (in a sed replacement, \\ -> \,
+  # \& -> &, and a bare & -> the whole match). A directory base name cannot
+  # contain the / delimiter, but can contain \\, &, and ". Per character:
+  #   \\  -> \\\\  (file gets \\, which JSON decodes back to \\)
+  #   &  -> \&    (file gets &)
+  #   "  -> \\"   (file gets \", which JSON decodes back to ")
+  # Backslash is escaped first so the backslashes added for & and " are not
+  # doubled in turn. (naive escaping of \\ alone would be silently wrong:
+  # the file would carry a bare \, which JSON reads as an escape — a name
+  # of a\b would decode to a<backspace>.)
+  bs='\\'
+  name_esc=${name_base//"\\"/"${bs}${bs}"}
+  name_esc=${name_esc//&/\\&}
+  name_esc=${name_esc//\"/"${bs}\""}
+  sed "s/\"name\"[[:space:]]*:[[:space:]]*\"NAME\"/\"name\": \"$name_esc\"/" "$profile_tpl" >"$profile_tpl.tmp"
+  mv "$profile_tpl.tmp" "$profile_tpl"
+fi
+
 mv "$workdir/.sandbox/run_harness.sh" "$workdir/run_harness.sh"
 
 # The template's mode bits were validated above; if the copy lost them,
@@ -275,6 +381,6 @@ if [[ ! -x "$workdir/.sandbox/start.sh" ]]; then
 fi
 
 # Provisioning complete: run_harness.sh in place, .sandbox populated,
-# defaults.sh generated or preserved. Hand over through the same single
-# exec site as the fast path.
-handover "$@"
+# defaults.sh generated. Summarize and stop — the first run does not launch
+# the harness; the next invocation takes the silent fast path.
+provision_summary "$@"
