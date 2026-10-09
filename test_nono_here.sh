@@ -903,6 +903,30 @@ STUB
   chmod +x "$path"
 }
 
+# write_schema_nono <path> <calls-file> [fail_schema]
+# Like write_fake_nono, but also implements `profile schema --output <path>`
+# (writes a sentinel file) and `profile schema` exits fail_schema (default
+# 0). Lets cases 22/23 drive the schema-export code path deterministically.
+write_schema_nono() {
+  local path="$1" calls="$2" fail_schema="${3:-0}"
+  cat >"$path" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >>"$calls"
+if [ "\${1:-}" = "profile" ] && [ "\${2:-}" = "schema" ]; then
+  if [ $fail_schema -ne 0 ]; then exit $fail_schema; fi
+  out=""
+  while [ \$# -gt 0 ]; do
+    if [ "\$1" = "--output" ]; then out="\$2"; fi
+    shift
+  done
+  if [ -n "\$out" ]; then printf '{"title":"nono-profile (test sentinel)"}\n' >"\$out"; fi
+  exit 0
+fi
+exit 0
+STUB
+  chmod +x "$path"
+}
+
 # run_nh_profile <workdir> <home> <nono_home> <harness> <record> <calls>
 # <bin-dir> <stdout> <stderr> [fail_pull] -> echoes the exit code. Like
 # run_nh, but with a custom PATH ($bin-dir first) so the case controls which
@@ -1057,6 +1081,218 @@ case20() {
 }
 
 # ==================================================================
+# Case 21: provisioning summarizes and stops — it must not exec the
+# harness, and arguments must come back as an exact re-run command.
+# ==================================================================
+case21() {
+  local id="21: provisioning prints a summary, does not exec the harness"
+  local fx wd home nh record rc
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"
+  mkdir -p "$wd" "$home" "$nh"
+  make_template "$nh/templates/default"
+  record="$fx/record.bin"
+
+  rc="$(run_nh "$wd" "$home" "$nh" "codex" "" /dev/null "$fx/out" "$fx/err" --max-turns 25 "hello world")"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ -f "$record" ]]; then
+    fail "$id" "harness was launched on the provisioning run (record file exists)"
+    return
+  fi
+  if [[ ! -f "$wd/run_harness.sh" || ! -d "$wd/.sandbox" ]]; then
+    fail "$id" "provisioning artifacts missing"
+    return
+  fi
+  if grep -q "provisioned:" "$fx/err" \
+      && grep -q "nono-here.sh" "$fx/err" \
+      && grep -q -- "--max-turns" "$fx/err" \
+      && grep -q "25" "$fx/err" \
+      && grep -qF 'hello\ world' "$fx/err"; then
+    pass "$id"
+  else
+    fail "$id" "summary missing or incomplete: $(cat "$fx/err")"
+  fi
+}
+
+# ==================================================================
+# Case 22: `nono profile schema` is exported to ~/.nono-here/ and the
+# bundled template's profile.template.json references it via $schema.
+# ==================================================================
+case22() {
+  local id="22: schema exported to ~/.nono-here/; bundled template references it via \$schema"
+  local fx wd home nh record calls bin rc schema
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
+  mkdir -p "$wd" "$home" "$nh" "$bin" "$nh/templates"
+  # The bundled real template (so profile.template.json is present), not
+  # the minimal make_template stub.
+  cp -R "$DEFAULT_TEMPLATE_DIR" "$nh/templates/default"
+  record="$fx/record.bin"; calls="$fx/nono_calls"
+  write_schema_nono "$bin/nono" "$calls"
+
+  local rc2=0
+  (
+    cd "$wd" &&
+      env -u NONO_HERE_HOME -u NONO_HERE_HARNESS -u RUN_HARNESS_RECORD \
+        -u XDG_CONFIG_HOME -u NONO_CONFIG -u NONO_PACKAGES \
+        HOME="$home" NONO_HERE_HOME="$nh" NONO_HERE_HARNESS="codex" \
+        RUN_HARNESS_RECORD="$record" PATH="$bin:$PATH" \
+        "$NONO_HERE"
+  ) </dev/null >"$fx/out" 2>"$fx/err" || rc2=$?
+  rc="$rc2"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  schema="$home/.nono-here/nono-profile.schema.json"
+  if [[ ! -f "$schema" ]]; then
+    fail "$id" "schema not exported to $schema (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if grep -q 'profile schema --output' "$calls"; then
+    : # exported through the documented subcommand
+  else
+    fail "$id" "expected 'nono profile schema --output ...', calls: $(cat "$calls")"
+    return
+  fi
+  if grep -q '"\$schema": "~/.nono-here/nono-profile.schema.json"' "$wd/.sandbox/profile.template.json"; then
+    pass "$id"
+  else
+    fail "$id" "profile.template.json missing the \$schema reference: $(cat "$wd/.sandbox/profile.template.json")"
+  fi
+}
+
+# ==================================================================
+# Case 23: a failing schema export warns but provisioning still completes
+# (best-effort: editor convenience only, never fatal).
+# ==================================================================
+case23() {
+  local id="23: failing schema export warns, provisioning completes"
+  local fx wd home nh record calls bin rc
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
+  mkdir -p "$wd" "$home" "$nh" "$bin"
+  make_template "$nh/templates/default"
+  record="$fx/record.bin"; calls="$fx/nono_calls"
+  write_schema_nono "$bin/nono" "$calls" 3
+
+  local rc2=0
+  (
+    cd "$wd" &&
+      env -u NONO_HERE_HOME -u NONO_HERE_HARNESS -u RUN_HARNESS_RECORD \
+        -u XDG_CONFIG_HOME -u NONO_CONFIG -u NONO_PACKAGES \
+        HOME="$home" NONO_HERE_HOME="$nh" NONO_HERE_HARNESS="codex" \
+        RUN_HARNESS_RECORD="$record" PATH="$bin:$PATH" \
+        "$NONO_HERE"
+  ) </dev/null >"$fx/out" 2>"$fx/err" || rc2=$?
+  rc="$rc2"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ ! -f "$wd/run_harness.sh" ]]; then
+    fail "$id" "run_harness.sh not provisioned"
+    return
+  fi
+  if grep -q "nono profile schema --output" "$fx/err" && ! grep -q "profile schema exported" "$fx/err" \
+      && ! grep -q '^  schema:' "$fx/err"; then
+    pass "$id"
+  else
+    fail "$id" "expected a schema-export warning without a success line: $(cat "$fx/err")"
+  fi
+}
+
+# ==================================================================
+# Case 24: a re-run after provisioning takes the silent fast path and
+# forwards arguments — the summary's "Re-running $SELF now takes the
+# fast path and launches the harness" promise.
+# ==================================================================
+case24() {
+  local id="24: re-run after provisioning takes the fast path, args forwarded"
+  local fx wd home nh record rc
+  fx="$(new_fixture)"
+  wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"
+  mkdir -p "$wd" "$home" "$nh"
+  make_template "$nh/templates/default"
+  record="$fx/record.bin"
+
+  rc="$(run_nh "$wd" "$home" "$nh" "codex" "" /dev/null "$fx/out" "$fx/err")"
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "provisioning run: expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ -f "$record" ]]; then
+    fail "$id" "harness was launched on the provisioning run (record file exists)"
+    return
+  fi
+
+  rm -f "$fx/out" "$fx/err"
+  rc="$(run_nh "$wd" "$home" "$nh" "" "$record" /dev/null "$fx/out" "$fx/err" --max-turns 25 "hello world")"
+  if [[ "$rc" != "0" ]]; then
+    fail "$id" "re-run: expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ -s "$fx/err" ]]; then
+    fail "$id" "fast-path re-run was not silent: $(cat "$fx/err")"
+    return
+  fi
+  if [[ -f "$record" ]] && read_argv "$record" && argv_eq --max-turns 25 "hello world"; then
+    pass "$id"
+  else
+    fail "$id" "re-run did not forward argv to the harness"
+  fi
+}
+
+# ==================================================================
+# Case 25: the provisioned profile's meta.name is substituted with the
+# workdir's base name (unique per project) instead of the "NAME" placeholder.
+# Exercises both bundled profile templates (25a/25b) and a base name full of
+# sed/JSON special characters (25c: quote, ampersand, backslash, spaces) to
+# lock in the escaping — the provisioned value must JSON-decode back to the
+# directory's actual name.
+# ==================================================================
+case25_sub() {
+  local label="$1" tmpl="$2" base="$3" expected_file_form="$4"
+  local fx wd home nh record rc tpl
+  fx="$(new_fixture)"
+  wd="$fx/$base"; home="$fx/home"; nh="$fx/nonohome"
+  mkdir -p "$wd" "$home" "$nh" "$nh/templates"
+  cp -R "$tmpl" "$nh/templates/default"
+  record="$fx/record.bin"
+
+  rc="$(run_nh "$wd" "$home" "$nh" "codex" "$record" /dev/null "$fx/out" "$fx/err")"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$label" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  tpl="$wd/.sandbox/profile.template.json"
+  if [[ ! -f "$tpl" ]]; then
+    fail "$label" "profile.template.json missing from .sandbox"
+    return
+  fi
+  if grep -qF "\"name\": \"$expected_file_form\"" "$tpl" && ! grep -q '"name": "NAME"' "$tpl"; then
+    pass "$label"
+  else
+    fail "$label" "meta.name not substituted to the expected file form: $(cat "$tpl")"
+  fi
+}
+
+case25() {
+  case25_sub "25a: bundled default template profile named after workdir" "$DEFAULT_TEMPLATE_DIR" work work
+  case25_sub "25b: bundled claude template profile named after workdir" "$REPO_ROOT/templates/claude" work work
+  # We"ird & na\me proj: the file must carry the JSON-encoded form
+  # (\" for the quote, \\ for the backslash) so it decodes back to the name.
+  case25_sub "25c: sed/JSON special chars in workdir name (\" & \\ spaces)" "$DEFAULT_TEMPLATE_DIR" 'we"ird & na\me proj' 'we\"ird & na\\me proj'
+}
+
+# ==================================================================
 # Driver
 # ==================================================================
 main() {
@@ -1080,6 +1316,11 @@ main() {
   case18
   case19
   case20
+  case21
+  case22
+  case23
+  case24
+  case25
 
   echo "----"
   echo "passed: $PASS_COUNT, failed: $FAIL_COUNT"

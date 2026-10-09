@@ -6,14 +6,15 @@ copilot, pi, ...) inside a [`nono`](https://nono.sh) sandbox.
 Drop `nono-here.sh` on your `PATH` (keeping its sibling `templates/`
 directory next to it, or overriding via `~/.nono-here/templates/`), run it
 from any project, and it provisions a `.sandbox/` directory plus a
-`run_harness.sh` entry point — then hands over to the harness. Every subsequent run in that project takes
-a silent fast path straight to the harness.
+`run_harness.sh` entry point, exports the nono profile schema to
+`~/.nono-here/`, and prints a short summary. Every subsequent run in that
+project takes a silent fast path straight to the harness.
 
 ## Usage
 
 ```sh
 cd /path/to/project
-nono-here.sh [args passed through to the harness]
+nono-here.sh [args forwarded to the harness on the fast path]
 ```
 
 **First run (provisioning):** no `run_harness.sh` in the workspace yet.
@@ -28,9 +29,20 @@ nono-here.sh [args passed through to the harness]
   is `$NONO_PACKAGES`, else `$NONO_CONFIG/packages`, else
   `${XDG_CONFIG_HOME:-~/.config}/nono/packages`.
 - Create `.sandbox/`, copy the template into it, substitute the chosen
-  harness into `.sandbox/defaults.sh`, move `run_harness.sh` into the
+  harness into `.sandbox/defaults.sh`, set the profile's `meta.name` to the
+  project directory's base name, and move `run_harness.sh` into the
   workspace root.
-- Hand over to `./run_harness.sh "$@"`.
+- Export the nono profile JSON schema to
+  `~/.nono-here/nono-profile.schema.json` (`nono profile schema`) so the
+  `$schema` reference in `profile.template.json` resolves for editors that
+  expand `~`. Best
+  effort: a missing `nono` or a failed export warns and provisioning
+  continues (a dangling `$schema` only costs editor validation).
+- Print a short summary (workdir, harness, template, sandbox, schema) and
+  stop — the first run does not launch the harness. Any arguments are not
+  forwarded; the summary offers the exact re-run command
+  (`nono-here.sh ...`). Re-running `nono-here.sh` now takes the
+  fast path.
 
 **Subsequent runs (fast path):** `run_harness.sh` already exists and is
 executable, `.sandbox/start.sh` is executable → hands over immediately,
@@ -50,14 +62,17 @@ nono wrap --profile .sandbox/profile.json --workdir "$PWD" --allow-cwd -- \
   claude --allowed-tools "Grep Glob" --model sonnet --max-turns 25
 ```
 
-After provisioning, the same run is:
+After provisioning, every run is:
 
 ```sh
 nono-here.sh --max-turns 25
 ```
 
-(`run_harness.sh` is what `nono-here.sh` hands over to; you never need
-to call it yourself.)
+(the very first run only provisions and prints a summary; every run after
+that is the one-word form above)
+
+(you always just call `nono-here.sh`; after the first run it hands over to
+`run_harness.sh` on the fast path.)
 
 The harness command and its repeated flags live in
 `.sandbox/defaults.sh` (copied once at provisioning, then yours to edit);
@@ -81,15 +96,19 @@ Commit `run_harness.sh` and `.sandbox/` to the project. The template's
 the source. A teammate who has installed [nono](https://nono.sh) clones the
 repo and runs `./run_harness.sh` (or `nono-here.sh`, if it is on their
 PATH — the fast path takes over); no provisioning needed. On first
-start, `start.sh` copies `profile.template.json` to `profile.json` (with a
-"check and adjust" notice), so each person keeps local overrides private
-while the team shares one baseline.
+start, `start.sh` copies `profile.template.json` to `profile.json` (carrying
+the `$schema` reference to the user-level schema, with a "check and adjust"
+notice), so each person keeps local overrides private while the team shares
+one baseline.
 
 ### Per-project profiles, tuned per project
 
 Each project gets its own `.sandbox/profile.template.json` — network
 domains, filesystem rules, and allowed environment variables scoped to
-what that project actually needs. Local tweaks go in the git-ignored
+what that project actually needs. At provisioning, `meta.name` is set to the
+base name of the project directory (replacing the template's `NAME`
+placeholder) so each project's profile carries a unique, meaningful name.
+Local tweaks go in the git-ignored
 `profile.json`; bump `meta.version` in the template to get a diff prompt
 whenever the shared baseline changes (version comparison requires `jq`;
 without it you get a plain "differs from template" notice).
@@ -97,7 +116,7 @@ without it you get a plain "differs from template" notice).
 ### Scripted and non-interactive provisioning
 
 ```sh
-NONO_HERE_HARNESS=pi nono-here.sh   # no TTY required; args pass through
+NONO_HERE_HARNESS=pi nono-here.sh   # no TTY required; args are not forwarded
 ```
 
 Useful in CI, remote shells, and dotfiles bootstrap scripts where the
@@ -116,6 +135,11 @@ The first existing directory wins, checked in this order:
 (symlinks followed), so the script works regardless of where it's
 symlinked from. `templates/claude` and `templates/default` ship in this
 repo.
+
+`~/.nono-here/` also receives the exported nono profile schema
+(`nono-profile.schema.json`) during provisioning; the bundled
+`profile.template.json` files reference it via `$schema`, so editors that
+expand `~` validate and autocomplete profile files.
 
 A template directory must contain:
 

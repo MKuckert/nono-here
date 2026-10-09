@@ -1,4 +1,5 @@
 {
+  "$schema": "~/.nono-here/nono-profile.schema.json",
   "extends": ["default"],
   "meta": {
     "name": "NAME",
