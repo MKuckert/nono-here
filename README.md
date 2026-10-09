@@ -41,7 +41,7 @@ nono-here.sh [args forwarded to the harness on the fast path]
 - Print a short summary (workdir, harness, template, sandbox, schema) and
   stop — the first run does not launch the harness. Any arguments are not
   forwarded; the summary offers the exact re-run command
-  (`./run_harness.sh ...`). Re-running `nono-here.sh` now takes the
+  (`nono-here.sh ...`). Re-running `nono-here.sh` now takes the
   fast path.
 
 **Subsequent runs (fast path):** `run_harness.sh` already exists and is
@@ -71,9 +71,8 @@ nono-here.sh --max-turns 25
 (the very first run only provisions and prints a summary; every run after
 that is the one-word form above)
 
-(`run_harness.sh` is what `nono-here.sh` hands over to on the fast path;
-the one time you call it yourself is right after the first run, whose
-summary points you to it.)
+(you always just call `nono-here.sh`; after the first run it hands over to
+`run_harness.sh` on the fast path.)
 
 The harness command and its repeated flags live in
 `.sandbox/defaults.sh` (copied once at provisioning, then yours to edit);

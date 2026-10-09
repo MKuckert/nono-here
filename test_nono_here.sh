@@ -1108,7 +1108,7 @@ case21() {
     return
   fi
   if grep -q "provisioned:" "$fx/err" \
-      && grep -q "run_harness.sh" "$fx/err" \
+      && grep -q "nono-here.sh" "$fx/err" \
       && grep -q -- "--max-turns" "$fx/err" \
       && grep -q "25" "$fx/err" \
       && grep -qF 'hello\ world' "$fx/err"; then

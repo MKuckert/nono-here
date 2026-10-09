@@ -174,14 +174,14 @@ provision_summary() {
       echo "  schema:    $SCHEMA_DEST"
     fi
     echo
-    echo "  Start the harness:  ./run_harness.sh   (from $workdir)"
+    echo "  Start the harness:  $SELF   (from $workdir)"
     if [[ $# -gt 0 ]]; then
       for a in "$@"; do
         quoted+=("$(printf '%q' "$a")")
       done
       echo
       echo "  Your arguments were not forwarded to the harness (the first run only provisions)."
-      echo "  Re-run with them:  ./run_harness.sh ${quoted[*]}"
+      echo "  Re-run with them:  $SELF ${quoted[*]}"
     fi
     echo
     echo "  Re-running $SELF now takes the fast path and launches the harness."
