@@ -51,6 +51,13 @@ silently.
 The workspace is the Git root (`git rev-parse --show-toplevel`) if inside a
 repo, otherwise `$PWD`.
 
+`run_harness.sh` and `.sandbox/start.sh` do **not** follow this rule: each
+anchors its workspace to its own location on disk (symlinks followed) —
+`run_harness.sh` lives in the workspace root, `start.sh` in
+`<workspace>/.sandbox`. So both can be invoked from any directory, with or
+without a surrounding git repo: `/path/to/project/run_harness.sh` works from
+anywhere, and a symlink to it on your `PATH` works too.
+
 ## When it earns its keep
 
 ### Long sandboxed invocations collapse to one word

@@ -2,8 +2,37 @@
 set -euo pipefail
 
 SELF=$(basename "$BASH_SOURCE")
-WORKSPACE=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
-SANDBOX_DIR="$WORKSPACE/.sandbox"
+
+# The sandbox directory is anchored to this script's own location, not the
+# CWD or the surrounding git repo: start.sh lives in <workspace>/.sandbox,
+# so it works no matter which directory it is invoked from (and keeps
+# working when the workspace is not a git repo at all). Symlinks are
+# followed, bounded to guard against cycles; portable — no readlink -f /
+# realpath (must work on macOS/Bash 3.2).
+resolve_script_dir() {
+    local src dir target hops
+    src="$0"
+    hops=0
+    while [[ -L "$src" ]]; do
+        hops=$((hops + 1))
+        if [[ "$hops" -gt 40 ]]; then
+            echo "$SELF: symlink resolution exceeded 40 hops (possible cycle) for '$0'" >&2
+            exit 1
+        fi
+        dir="$(cd -P "$(dirname "$src")" && pwd)"
+        target="$(readlink "$src")"
+        case "$target" in
+            /*) src="$target" ;;
+            *) src="$dir/$target" ;;
+        esac
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+
+# Bare assignment (no local/export): under set -e a failure inside
+# resolve_script_dir must abort the script.
+SANDBOX_DIR="$(resolve_script_dir)"
+WORKSPACE="$(dirname "$SANDBOX_DIR")"
 PROFILE_JSON="$SANDBOX_DIR/profile.json"
 PROFILE_TEMPLATE="$SANDBOX_DIR/profile.template.json"
 

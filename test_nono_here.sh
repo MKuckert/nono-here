@@ -1293,6 +1293,136 @@ case25() {
 }
 
 # ==================================================================
+# Case 26: real template run_harness.sh invoked from another directory
+# (abs path, symlink in that other directory, or a workspace
+# subdirectory) anchors the workspace to its own location, not the CWD
+# or a surrounding git repo.
+# ==================================================================
+
+# case26_sub <label> <invoke-style: abs|symlink|subdir>
+case26_sub() {
+  local label="$1" style="$2"
+  local fx wd elsewhere record rc from target
+  fx="$(new_fixture)"
+  wd="$fx/work"
+  mkdir -p "$wd/.sandbox" "$fx/elsewhere"
+  cp "$DEFAULT_TEMPLATE_DIR/run_harness.sh" "$wd/run_harness.sh"
+  chmod +x "$wd/run_harness.sh"
+  write_stub_start "$wd/.sandbox/start.sh"
+  printf '%s\n' $'SANDBOX_COMMAND="foo"\nSANDBOX_COMMAND_DEFAULTS=("--msg" "hello world")' >"$wd/.sandbox/defaults.sh"
+  record="$fx/start_record.bin"
+
+  # A git repo in the *other* directory: under the old CWD/git-based
+  # resolution this would have been picked as the workspace and the run
+  # would have failed with "missing defaults file".
+  git -C "$fx/elsewhere" init -q
+
+  case "$style" in
+    abs) from="$fx/elsewhere"; target="$wd/run_harness.sh" ;;
+    symlink)
+      ln -s "$wd/run_harness.sh" "$fx/elsewhere/rh"
+      from="$fx/elsewhere"; target="./rh" ;;
+    subdir)
+      mkdir -p "$wd/sub"
+      from="$wd/sub"; target="../run_harness.sh" ;;
+  esac
+
+  local rc2=0
+  (
+    cd "$from" &&
+      env -u DEFAULTS_FILE -u SANDBOX_COMMAND -u SANDBOX_COMMAND_DEFAULTS \
+        START_RECORD="$record" \
+        bash "$target"
+  ) >"$fx/out" 2>"$fx/err" || rc2=$?
+  rc="$rc2"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$label" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if ! read_argv "$record"; then
+    fail "$label" "record file missing/short: $record"
+    return
+  fi
+  if argv_eq foo --msg "hello world"; then
+    pass "$label"
+  else
+    fail "$label" "expected [foo --msg hello world] got [${ARGV_RESULT[*]}]"
+  fi
+}
+
+case26() {
+  case26_sub "26a: run_harness.sh from another dir (abs path, other dir is a git repo)" abs
+  case26_sub "26b: run_harness.sh via symlink in another dir" symlink
+  case26_sub "26c: run_harness.sh from a workspace subdirectory" subdir
+}
+
+# ==================================================================
+# Case 27: real template start.sh invoked from another directory (abs
+# path or symlink) cds into its workspace and calls nono wrap with the
+# anchored workdir.
+# ==================================================================
+
+# case27_sub <label> <invoke-style: abs|symlink>
+case27_sub() {
+  local label="$1" style="$2"
+  local fx wd elsewhere bin record rc from target
+  fx="$(new_fixture)"
+  wd="$fx/work"
+  mkdir -p "$wd/.sandbox" "$fx/elsewhere" "$fx/bin"
+  cp "$DEFAULT_TEMPLATE_DIR/start.sh" "$wd/.sandbox/start.sh"
+  chmod +x "$wd/.sandbox/start.sh"
+  cp "$DEFAULT_TEMPLATE_DIR/profile.template.json" "$wd/.sandbox/"
+  git -C "$fx/elsewhere" init -q
+
+  # Recording fake nono: argv joined by spaces, then the CWD it ran in,
+  # written to the file named by $NONO_RECORD.
+  cat >"$fx/bin/nono" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*|$PWD" >"$NONO_RECORD"
+exit 0
+STUB
+  chmod +x "$fx/bin/nono"
+  record="$fx/nono_record"
+
+  case "$style" in
+    abs) from="$fx/elsewhere"; target="$wd/.sandbox/start.sh" ;;
+    symlink)
+      ln -s "$wd/.sandbox/start.sh" "$fx/elsewhere/start.sh"
+      from="$fx/elsewhere"; target="./start.sh" ;;
+  esac
+
+  local rc2=0
+  (
+    cd "$from" &&
+      env PATH="$fx/bin:$PATH" NONO_RECORD="$record" bash "$target" claude --verbose
+  ) >"$fx/out" 2>"$fx/err" || rc2=$?
+  rc="$rc2"
+
+  if [[ "$rc" != "0" ]]; then
+    fail "$label" "expected exit 0, got $rc (stderr: $(cat "$fx/err"))"
+    return
+  fi
+  if [[ ! -f "$wd/.sandbox/profile.json" ]]; then
+    fail "$label" "profile.json was not created in the anchored workspace"
+    return
+  fi
+  local line expected
+  line="$(cat "$record")"
+  expected="wrap --profile $wd/.sandbox/profile.json --workdir $wd --allow-cwd -- claude --verbose|$wd"
+  if [[ "$line" == "$expected" ]]; then
+    pass "$label"
+  else
+    fail "$label" "nono invocation mismatch: got [$line] expected [$expected]"
+  fi
+}
+
+case27() {
+  case27_sub "27a: start.sh from another dir (abs path) anchors workspace + cwd" abs
+  case27_sub "27b: start.sh via symlink in another dir" symlink
+}
+
+# ==================================================================
 # Driver
 # ==================================================================
 main() {
@@ -1321,6 +1451,8 @@ main() {
   case23
   case24
   case25
+  case26
+  case27
 
   echo "----"
   echo "passed: $PASS_COUNT, failed: $FAIL_COUNT"
