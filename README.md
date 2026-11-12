@@ -98,7 +98,8 @@ way in a daily workflow.
 ### Sharing a sandboxed setup with your team
 
 Commit `run_harness.sh` and `.sandbox/` to the project. The template's
-`.gitignore` excludes only the local `profile.json`, so the shared parts —
+`.gitignore` excludes only the local `profile.json` and its
+`profile.json.sha256`, so the shared parts —
 `profile.template.json`, `hooks/`, `start.sh`, `defaults.sh` — travel with
 the source. A teammate who has installed [nono](https://nono.sh) clones the
 repo and runs `./run_harness.sh` (or `nono-here.sh`, if it is on their
@@ -116,9 +117,15 @@ what that project actually needs. At provisioning, `meta.name` is set to the
 base name of the project directory (replacing the template's `NAME`
 placeholder) so each project's profile carries a unique, meaningful name.
 Local tweaks go in the git-ignored
-`profile.json`; bump `meta.version` in the template to get a diff prompt
-whenever the shared baseline changes (version comparison requires `jq`;
-without it you get a plain "differs from template" notice).
+`profile.json`; bump `meta.version` in the template whenever the shared
+baseline changes. Each copy from the template records a SHA-256 hash in
+`profile.json.sha256` (via `shasum` or `sha256sum`). On a version bump, an
+unmodified `profile.json` (hash still matches) is replaced with the new
+template automatically; one with local edits is left alone and you get a
+diff prompt instead. Version comparison requires `jq`; without it, a
+content difference triggers the same update-or-notice logic. Without a hash
+tool, or for a `profile.json` created before hashing existed, the file is
+treated as locally edited — delete it to reset to the template.
 
 ### Scripted and non-interactive provisioning
 
