@@ -1,0 +1,44 @@
+{
+  "$schema": "~/.nono-here/nono-profile.schema.json",
+  "extends": ["nolabs-ai/pi"],
+  "meta": {
+    "name": "NAME",
+    "version": "1"
+  },
+  "workdir": {
+    "access": "readwrite"
+  },
+  "filesystem": {
+    "allow": [],
+    "deny": ["~/.gitconfig"],
+    "read_file": [
+      "~/.gitconfig-private",
+      "~/.gitconfig-work",
+      "~/.gitconfig-agents",
+      "~/.gitignore",
+      "~/.bashrc",
+      "~/.bashprofile"
+    ],
+    "read": ["~/.CFUserTextEncoding"],
+    "bypass_protection": ["~/.bashrc", "~/.bashprofile"]
+  },
+  "environment": {
+    "allow_vars": [
+      "HOME",
+      "SHELL",
+      "TERM",
+      "PATH",
+      "LSCOLORS",
+      "LS_COLORS",
+      "LC_ALL",
+      "LANG",
+      "PWD",
+      "USER",
+      "EDITOR",
+      "DO_NOT_TRACK"
+    ],
+    "set_vars": {
+      "GIT_CONFIG_GLOBAL": "~/.gitconfig-agents"
+    }
+  }
+}
