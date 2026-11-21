@@ -391,12 +391,12 @@ case05() {
 }
 
 # ==================================================================
-# Case 6: template precedence across all four positions
+# Case 6: template precedence across both positions
 # ==================================================================
 case06_sub() {
   local label="$1" harness="$2" want_marker="$3"
   shift 3
-  local positions=("$@") # list of position names to actually create: A B C D
+  local positions=("$@") # list of position names to actually create: A B
   local fx wd home nh record rc pos
   fx="$(new_fixture)"
   wd="$fx/work"
@@ -407,10 +407,8 @@ case06_sub() {
 
   for pos in "${positions[@]}"; do
     case "$pos" in
-      A) make_template "$home/.nono-here/templates/$harness" A ;;
-      B) make_template "$home/.nono-here/templates/default" B ;;
-      C) make_template "$nh/templates/$harness" C ;;
-      D) make_template "$nh/templates/default" D ;;
+      A) make_template "$home/.nono-here/templates/default" A ;;
+      B) make_template "$nh/templates/default" B ;;
     esac
   done
 
@@ -435,17 +433,15 @@ case06_sub() {
 
 case06() {
   local harness="codex"
-  case06_sub "6a: HOME/.nono-here/templates/\$harness wins" "$harness" A A B C D
-  case06_sub "6b: HOME/.nono-here/templates/default wins (no harness-specific)" "$harness" B B C D
-  case06_sub "6c: NONO_HERE_HOME/templates/\$harness wins (no HOME overrides)" "$harness" C C D
-  case06_sub "6d: NONO_HERE_HOME/templates/default is last resort" "$harness" D D
+  case06_sub "6a: HOME/.nono-here/templates/default wins" "$harness" A A B
+  case06_sub "6b: NONO_HERE_HOME/templates/default is last resort" "$harness" B B
 }
 
 # ==================================================================
-# Case 7: no template found -> exit 5, all four paths in stderr
+# Case 7: no template found -> exit 5, both paths in stderr
 # ==================================================================
 case07() {
-  local id="7: no template found -> exit 5, all four paths listed"
+  local id="7: no template found -> exit 5, both paths listed"
   local fx wd home nh rc err_content
   fx="$(new_fixture)"
   wd="$fx/work"
@@ -461,9 +457,7 @@ case07() {
   fi
   err_content="$(cat "$fx/err")"
   local expect_paths=(
-    "$home/.nono-here/templates/codex"
     "$home/.nono-here/templates/default"
-    "$nh/templates/codex"
     "$nh/templates/default"
   )
   local p
@@ -948,18 +942,21 @@ run_nh_profile() {
 }
 
 # ==================================================================
-# Case 17: pack already installed -> no pull, provisioning completes
+# Case 17: all packs installed -> no pull, provisioning completes
 # ==================================================================
 case17() {
-  local id="17: pack installed -> no pull, exit 0"
-  local fx wd home nh record calls bin rc
+  local id="17: packs installed -> no pull, exit 0"
+  local fx wd home nh record calls bin rc p
   fx="$(new_fixture)"
   wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
   mkdir -p "$wd" "$home" "$nh" "$bin"
   make_template "$nh/templates/default"
-  # Installed pack in the child's HOME pack store.
-  mkdir -p "$home/.config/nono/packages/nolabs-ai/codex"
-  echo '{}' >"$home/.config/nono/packages/nolabs-ai/codex/package.json"
+  # All packs the unified profile extends, installed in the child's HOME
+  # pack store.
+  for p in claude opencode-v1 pi; do
+    mkdir -p "$home/.config/nono/packages/nolabs-ai/$p"
+    echo '{}' >"$home/.config/nono/packages/nolabs-ai/$p/package.json"
+  done
   record="$fx/record.bin"; calls="$fx/nono_calls"
 
   rc="$(run_nh_profile "$wd" "$home" "$nh" "codex" "$record" "$calls" "$bin" "$fx/out" "$fx/err")"
@@ -969,10 +966,12 @@ case17() {
     return
   fi
   if [[ -s "$calls" ]] && grep -q '^pull ' "$calls"; then
-    fail "$id" "nono pull was called although the pack is installed: $(cat "$calls")"
+    fail "$id" "nono pull was called although all packs are installed: $(cat "$calls")"
     return
   fi
-  if grep -q "profile pack 'nolabs-ai/codex' is installed" "$fx/err"; then
+  if grep -q "profile pack 'nolabs-ai/claude' is installed" "$fx/err" \
+      && grep -q "profile pack 'nolabs-ai/opencode-v1' is installed" "$fx/err" \
+      && grep -q "profile pack 'nolabs-ai/pi' is installed" "$fx/err"; then
     pass "$id"
   else
     fail "$id" "stderr missing installed notice: $(cat "$fx/err")"
@@ -980,11 +979,11 @@ case17() {
 }
 
 # ==================================================================
-# Case 18: pack missing -> nono pull with the mapped name, exit 0
+# Case 18: packs missing -> nono pull for each, exit 0
 # ==================================================================
 case18() {
-  local id="18: pack missing -> nono pull nolabs-ai/codex, exit 0"
-  local fx wd home nh record calls bin rc
+  local id="18: packs missing -> nono pull for each, exit 0"
+  local fx wd home nh record calls bin rc p
   fx="$(new_fixture)"
   wd="$fx/work"; home="$fx/home"; nh="$fx/nonohome"; bin="$fx/bin"
   mkdir -p "$wd" "$home" "$nh" "$bin"
@@ -1001,11 +1000,13 @@ case18() {
     fail "$id" "run_harness.sh not provisioned"
     return
   fi
-  if [[ -f "$calls" ]] && grep -q '^pull nolabs-ai/codex$' "$calls"; then
-    pass "$id"
-  else
-    fail "$id" "expected 'pull nolabs-ai/codex', calls: $(cat "$calls" 2>/dev/null)"
-  fi
+  for p in claude opencode-v1 pi; do
+    if [[ ! -f "$calls" ]] || ! grep -q "^pull nolabs-ai/$p$" "$calls"; then
+      fail "$id" "expected 'pull nolabs-ai/$p', calls: $(cat "$calls" 2>/dev/null)"
+      return
+    fi
+  done
+  pass "$id"
 }
 
 # ==================================================================
@@ -1030,7 +1031,7 @@ case19() {
     fail "$id" "workspace modified despite failed pull"
     return
   fi
-  if grep -q 'nono pull nolabs-ai/codex failed' "$fx/err"; then
+  if grep -q 'nono pull nolabs-ai/claude failed' "$fx/err"; then
     pass "$id"
   else
     fail "$id" "stderr missing failure message: $(cat "$fx/err")"
@@ -1252,10 +1253,9 @@ case24() {
 # ==================================================================
 # Case 25: the provisioned profile's meta.name is substituted with the
 # workdir's base name (unique per project) instead of the "NAME" placeholder.
-# Exercises both bundled profile templates (25a/25b) and a base name full of
-# sed/JSON special characters (25c: quote, ampersand, backslash, spaces) to
-# lock in the escaping — the provisioned value must JSON-decode back to the
-# directory's actual name.
+# Also exercises a base name full of sed/JSON special characters (25b:
+# quote, ampersand, backslash, spaces) to lock in the escaping — the
+# provisioned value must JSON-decode back to the directory's actual name.
 # ==================================================================
 case25_sub() {
   local label="$1" tmpl="$2" base="$3" expected_file_form="$4"
@@ -1286,10 +1286,9 @@ case25_sub() {
 
 case25() {
   case25_sub "25a: bundled default template profile named after workdir" "$DEFAULT_TEMPLATE_DIR" work work
-  case25_sub "25b: bundled claude template profile named after workdir" "$REPO_ROOT/templates/claude" work work
   # We"ird & na\me proj: the file must carry the JSON-encoded form
   # (\" for the quote, \\ for the backslash) so it decodes back to the name.
-  case25_sub "25c: sed/JSON special chars in workdir name (\" & \\ spaces)" "$DEFAULT_TEMPLATE_DIR" 'we"ird & na\me proj' 'we\"ird & na\\me proj'
+  case25_sub "25b: sed/JSON special chars in workdir name (\" & \\ spaces)" "$DEFAULT_TEMPLATE_DIR" 'we"ird & na\me proj' 'we\"ird & na\\me proj'
 }
 
 # ==================================================================

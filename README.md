@@ -22,11 +22,12 @@ nono-here.sh [args forwarded to the harness on the fast path]
   non-interactively via `NONO_HERE_HARNESS=<harness>`.
 - Resolve a template (see [Template resolution](#template-resolution)).
 - Validate the template.
-- Check that the harness's official `nolabs-ai` profile pack is installed
-  in the local nono pack store; if missing, run `nono pull <pack>`
-  (e.g. `nono pull nolabs-ai/codex`). Skipped with a warning when `nono`
-  is not on the PATH; a failed pull aborts with exit 11. The pack store
-  is `$NONO_PACKAGES`, else `$NONO_CONFIG/packages`, else
+- Check that the official `nolabs-ai` profile packs the unified profile
+  extends (`nolabs-ai/claude`, `nolabs-ai/opencode-v1`,
+  `nolabs-ai/pi`) are installed in the local nono pack store; run
+  `nono pull <pack>` for any missing one. Skipped with a warning when
+  `nono` is not on the PATH; a failed pull aborts with exit 11. The pack
+  store is `$NONO_PACKAGES`, else `$NONO_CONFIG/packages`, else
   `${XDG_CONFIG_HOME:-~/.config}/nono/packages`.
 - Create `.sandbox/`, copy the template into it, substitute the chosen
   harness into `.sandbox/defaults.sh`, set the profile's `meta.name` to the
@@ -138,21 +139,25 @@ interactive `select` prompt is unavailable.
 
 ## Template resolution
 
-The first existing directory wins, checked in this order:
+There is a single `default` template, shared by all harnesses. The first
+existing directory wins, checked in this order:
 
-1. `~/.nono-here/templates/<harness>` — user override, harness-specific
-2. `~/.nono-here/templates/default` — user override, default
-3. `$NONO_HERE_HOME/templates/<harness>` — bundled, harness-specific
-4. `$NONO_HERE_HOME/templates/default` — bundled, default
+1. `~/.nono-here/templates/default` — user override
+2. `$NONO_HERE_HOME/templates/default` — bundled
 
 `NONO_HERE_HOME` defaults to `nono-here.sh`'s own resolved directory
 (symlinks followed), so the script works regardless of where it's
-symlinked from. `templates/claude` and `templates/default` ship in this
-repo.
+symlinked from. `templates/default` ships in this repo.
+
+The bundled `profile.template.json` is a unified profile: it extends all
+three official agent packs (`nolabs-ai/claude`, `nolabs-ai/opencode-v1`,
+`nolabs-ai/pi`) and carries the union of their environment-variable
+allowances, filesystem rules, network grants and `set_vars`. Bump its
+`meta.version` whenever the shared baseline changes.
 
 `~/.nono-here/` also receives the exported nono profile schema
 (`nono-profile.schema.json`) during provisioning; the bundled
-`profile.template.json` files reference it via `$schema`, so editors that
+`profile.template.json` references it via `$schema`, so editors that
 expand `~` validate and autocomplete profile files.
 
 A template directory must contain:
@@ -167,12 +172,11 @@ edit it freely afterward (e.g. to set `SANDBOX_COMMAND_DEFAULTS`).
 
 ## Adding a harness
 
-Add the name to the `HARNESSES` array at the top of `nono-here.sh`. If the
-harness has an official `nolabs-ai` registry pack, add a matching case
-branch to `nono_pack_for()` so provisioning checks for and pulls it; without
-a branch the profile check is skipped with a notice. Add a matching
-`templates/<harness>/` directory if it needs a non-default template;
-otherwise it falls back to `templates/default`.
+Add the name to the `HARNESSES` array at the top of `nono-here.sh`. All
+harnesses share the single bundled template and its unified profile, so
+nothing else is needed. For per-workspace default flags, edit the
+provisioned `.sandbox/defaults.sh`; for a machine-wide template change,
+install a `~/.nono-here/templates/default` override.
 
 ## Exit codes
 
@@ -182,13 +186,13 @@ otherwise it falls back to `templates/default`.
 | 2 | `run_harness.sh` exists but is not executable |
 | 3 | `.sandbox/start.sh` missing or not executable (fast path) |
 | 4 | No TTY for interactive harness selection and `NONO_HERE_HARNESS` unset |
-| 5 | No template directory found in any of the four probed locations |
+| 5 | No template directory found in any of the two probed locations |
 | 6 | Stale/incomplete `.sandbox` left in place (no TTY to confirm, or user declined re-creation) |
 | 7 | Template invalid (missing/non-executable required file, missing placeholder, or copy lost permissions) |
 | 8 | Invalid `NONO_HERE_HARNESS` value |
 | 9 | A path that must be a regular file/directory is something else (e.g. `.sandbox` is not a directory) |
 | 10 | Interactive harness selection aborted (input closed) |
-| 11 | `nono pull` of the harness's profile pack failed |
+| 11 | `nono pull` of one of the profile's base packs failed |
 
 ## Testing
 
@@ -205,9 +209,8 @@ overridden, so the real `$HOME` is never touched.
 ```
 nono-here.sh              # the entry point
 templates/
-  default/                 # fallback template for any harness:
+  default/                 # the single template for all harnesses:
                            # run_harness.sh, start.sh, defaults.sh,
                            # profile.template.json, hooks/, .gitignore
-  claude/                  # claude-specific template (same layout)
 test_nono_here.sh          # test suite
 ```
