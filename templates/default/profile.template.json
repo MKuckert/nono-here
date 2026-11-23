@@ -27,7 +27,7 @@
     "bypass_protection": ["~/.bashrc", "~/.bashprofile"]
   },
   "network": {
-    "allow_domain": ["localhost", "github.com"],
+    "allow_domain": [],
     "open_port": [12100],
     "open_port_range": [[11400, 11500]]
   },
