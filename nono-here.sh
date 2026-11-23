@@ -15,19 +15,10 @@ die() {
   exit "$code"
 }
 
-# Official nolabs-ai registry pack for each harness (nolabs-ai/nono-packs).
-# Adding a harness with an official pack is one case branch; a harness
-# without a mapping skips the profile check with a notice.
-nono_pack_for() {
-  case "$1" in
-    claude) echo "nolabs-ai/claude" ;;
-    opencode) echo "nolabs-ai/opencode" ;;
-    codex) echo "nolabs-ai/codex" ;;
-    copilot) echo "nolabs-ai/copilot-cli" ;;
-    pi) echo "nolabs-ai/pi" ;;
-    *) echo "" ;;
-  esac
-}
+# Official nolabs-ai registry packs (nolabs-ai/nono-packs) that the unified
+# default profile.template.json extends. Every harness runs under that one
+# profile, so provisioning ensures all of them are installed.
+NONO_PACKS=(nolabs-ai/claude nolabs-ai/opencode-v1 nolabs-ai/pi)
 
 # Installed packs live in the pack store: $NONO_PACKAGES, else
 # ${XDG_CONFIG_HOME:-$HOME/.config}/nono/packages (nono resolves its config
@@ -44,36 +35,33 @@ nono_pack_store() {
   fi
 }
 
-# Ensure the selected harness's official nolabs-ai profile pack is installed;
-# pull it from the registry when missing. Called only during provisioning,
-# immediately before .sandbox creation, so no confirmation prompt or
-# validation can abort after the pull has taken effect.
+# Ensure every official nolabs-ai profile pack the unified profile extends
+# is installed; pull any missing ones from the registry. Called only during
+# provisioning, immediately before .sandbox creation, so no confirmation
+# prompt or validation can abort after a pull has taken effect.
 ensure_nono_profile() {
-  local harness="$1" pack store
-  pack="$(nono_pack_for "$harness")"
-  if [[ -z "$pack" ]]; then
-    echo "$SELF: no nolabs-ai pack mapping for harness '$harness'; skipping profile check" >&2
-    return 0
-  fi
+  local pack store
   if ! command -v nono >/dev/null 2>&1; then
-    echo "$SELF: 'nono' not found in PATH; cannot check for pack '$pack'. Install nono from https://nono.sh/ before running the harness." >&2
+    echo "$SELF: 'nono' not found in PATH; cannot check for profile packs ${NONO_PACKS[*]}. Install nono from https://nono.sh/ before running the harness." >&2
     return 0
   fi
   store="$(nono_pack_store)"
-  if [[ -d "$store/$pack" ]]; then
-    echo "$SELF: profile pack '$pack' is installed ($store/$pack)" >&2
-    return 0
-  fi
-  echo "$SELF: profile pack '$pack' not installed; running: nono pull $pack" >&2
-  if ! nono pull "$pack"; then
-    die 11 "nono pull $pack failed; re-run $SELF or install it manually: nono pull $pack"
-  fi
-  # Non-fatal: if the local nono resolves its pack store differently than
-  # nono_pack_store() (version drift), surface the mismatch instead of
-  # proceeding silently with the profile still missing.
-  if [[ ! -d "$store/$pack" ]]; then
-    echo "$SELF: Warning: 'nono pull $pack' succeeded but '$store/$pack' was not found; the local nono may use a different pack store. Verify with: nono profile list" >&2
-  fi
+  for pack in "${NONO_PACKS[@]}"; do
+    if [[ -d "$store/$pack" ]]; then
+      echo "$SELF: profile pack '$pack' is installed ($store/$pack)" >&2
+      continue
+    fi
+    echo "$SELF: profile pack '$pack' not installed; running: nono pull $pack" >&2
+    if ! nono pull "$pack"; then
+      die 11 "nono pull $pack failed; re-run $SELF or install it manually: nono pull $pack"
+    fi
+    # Non-fatal: if the local nono resolves its pack store differently than
+    # nono_pack_store() (version drift), surface the mismatch instead of
+    # proceeding silently with the profile still missing.
+    if [[ ! -d "$store/$pack" ]]; then
+      echo "$SELF: Warning: 'nono pull $pack' succeeded but '$store/$pack' was not found; the local nono may use a different pack store. Verify with: nono profile list" >&2
+    fi
+  done
 }
 
 # Export the nono profile JSON schema to $HOME/.nono-here/ so the $schema
@@ -230,13 +218,12 @@ else
   fi
 fi
 
-# Template resolution: user overrides beat bundled templates,
-# harness-specific beats default; the first existing directory wins.
+# Template resolution: the user override beats the bundled template; the
+# first existing directory wins. There is a single default template — all
+# harnesses share it.
 template=""
 for candidate in \
-  "${HOME:-}/.nono-here/templates/$harness" \
   "${HOME:-}/.nono-here/templates/default" \
-  "$NONO_HERE_HOME/templates/$harness" \
   "$NONO_HERE_HOME/templates/default"; do
   if [[ -d "$candidate" ]]; then
     template="$candidate"
@@ -246,9 +233,7 @@ done
 
 if [[ -z "$template" ]]; then
   die 5 "no template directory found; probed in order:
-${HOME:-}/.nono-here/templates/$harness
 ${HOME:-}/.nono-here/templates/default
-$NONO_HERE_HOME/templates/$harness
 $NONO_HERE_HOME/templates/default"
 fi
 
@@ -309,7 +294,7 @@ fi
 # only after every path that can still abort — template validation, the
 # stale-.sandbox confirmation prompt, the exit-9 guards — so a pull never
 # takes effect for a provisioning that ends without creating .sandbox.
-ensure_nono_profile "$harness"
+ensure_nono_profile
 export_nono_schema
 
 mkdir -p "$workdir/.sandbox"
